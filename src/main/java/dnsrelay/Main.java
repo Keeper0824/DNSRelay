@@ -21,7 +21,7 @@ public class Main {
      */
     public static void main(String[] args) throws Exception {
         // 默认上游 DNS 服务器
-        String upstream = "114.114.114.114";
+        String upstream = "4.2.2.1";
         // 默认本地解析表文件
         String table = "dnsrelay.txt";
         // 默认不打印日志

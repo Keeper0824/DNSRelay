@@ -9,9 +9,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -48,10 +46,12 @@ public class DnsRelayServer {
      * 用于向上游DNS转发请求的随机端口Socket
      */
     private final DatagramSocket upstreamSocket;
+    private final DnsCache cache = new DnsCache("cache.txt");
     /**
      * 异步线程池，用于并发处理客户端查询
      */
     private ExecutorService executor = Executors.newCachedThreadPool();
+
 
     /**
      * 构造函数：初始化上游服务器、日志级别、绑定本地53端口、加载本地映射表
@@ -98,6 +98,8 @@ public class DnsRelayServer {
             System.out.printf("Try to load table \"%s\" ... OK%n", tableFile);
             System.out.printf("%d names, occupy %d bytes memory%n%n", entryCnt, mem);
         }
+        Runtime.getRuntime().addShutdownHook(new Thread(cache::close));
+
     }
 
     /**
@@ -149,51 +151,69 @@ public class DnsRelayServer {
      * @throws IOException 如果发送/接收失败
      */
     private void handleQuery(DatagramPacket pkt) throws IOException {
-        // 解析 DNS 报文
-        ByteBuffer in = ByteBuffer.wrap(pkt.getData(), 0, pkt.getLength()).order(ByteOrder.BIG_ENDIAN);
+        // ---------- 解析请求 ----------
+        ByteBuffer in = ByteBuffer.wrap(pkt.getData(), 0, pkt.getLength())
+                .order(ByteOrder.BIG_ENDIAN);
         DnsHeader reqHeader = DnsHeader.parse(in);
         DnsQuestion question = DnsQuestion.parse(in);
-
         String clientIp = pkt.getAddress().getHostAddress();
 
-        // 普通日志：打印收到的查询信息
         if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-            System.out.printf("← %-15s : %-30s (ID 0x%04X)%n", clientIp, question.qName(), reqHeader.id());
+            System.out.printf("← %-15s : %-30s (ID 0x%04X)%n",
+                    clientIp, question.qName(), reqHeader.id());
         }
 
-        // 查询本地映射表
+        int qType = question.qType();           // 1 = A, 28 = AAAA
+        boolean wantV6 = (qType == DnsRecord.TYPE_AAAA);
         String ip = localTable.get(question.qName().toLowerCase());
-        byte[] resp;
+        byte[] resp = null;                       // ← 先置空，防遗漏
 
-        if (ip != null && !"0.0.0.0".equals(ip)) {
-            // 本地有记录且不是 0.0.0.0：直接返回 A 记录
-            resp = ResponseBuilder.buildLocalAnswer(reqHeader, question, ip);
-            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-                System.out.printf("→ %-15s : local  %s%n", clientIp, ip);
-            }
-        } else if (ip != null) {
-            // 本地记录为 0.0.0.0：返回 Name Error 拦截
-            resp = ResponseBuilder.buildNameError(reqHeader, question);
-            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-                System.out.printf("→ %-15s : BLOCK  (NameError)%n", clientIp);
-            }
-        } else {
-            // 本地无记录：转发给上游 DNS
-            resp = forwardToUpstream(pkt.getData(), pkt.getLength(), reqHeader.id());
-            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-                System.out.printf("→ %-15s : upstream%n", clientIp);
+        if (ip != null) {
+            if ("0.0.0.0".equals(ip)) {              // 拦截条目
+                resp = ResponseBuilder.buildNameError(reqHeader, question);
+                if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal())
+                    System.out.printf("→ %-15s : BLOCK  (NameError)%n", clientIp);
+            } else {
+                boolean isV6 = ip.indexOf(':') >= 0;
+                if (isV6 == wantV6) {                // 类型匹配才直接回答
+                    resp = ResponseBuilder.buildLocalAnswer(reqHeader, question, ip);
+                    if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal())
+                        System.out.printf("→ %-15s : local  %s%n", clientIp, ip);
+                }
+                // 类型不匹配就留给后面缓存/上游处理
             }
         }
 
-        // 调试日志：打印十六进制数据包
+        if (resp == null) {
+            // 先拿出缓存里的所有条目（拷贝成可变列表）
+            List<String> ips = new ArrayList<>(cache.lookupAll(question.qName()));
+
+            // 只保留当前请求类型（A / AAAA）
+            ips.removeIf(addr -> (addr.indexOf(':') >= 0) != wantV6);
+
+            if (!ips.isEmpty()) {
+                // 多条一起打包回 Answer
+                resp = ResponseBuilder.buildLocalAnswer(reqHeader, question, ips);
+
+                if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal())
+                    System.out.printf("→ %-15s : cache   %s (%d RRs)%n",
+                            clientIp, ips.get(0), ips.size());
+            }
+        }
+        if (resp == null) {
+            resp = forwardToUpstream(pkt.getData(), pkt.getLength(),
+                    reqHeader.id(), question);
+            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal())
+                System.out.printf("→ %-15s : upstream%n", clientIp);
+        }
+        socket.send(new DatagramPacket(resp, resp.length, pkt.getSocketAddress()));
+
         if (logLevel == LogLevel.DEBUG) {
             dumpHex("REQ ", pkt.getData(), pkt.getLength());
             dumpHex("RESP", resp, resp.length);
         }
-
-        // 将响应发回客户端
-        socket.send(new DatagramPacket(resp, resp.length, pkt.getSocketAddress()));
     }
+
 
     /**
      * 将查询报文同步转发到上游 DNS，等待响应并修正事务 ID
@@ -203,35 +223,84 @@ public class DnsRelayServer {
      * @param id    原始事务 ID
      * @return 上游响应报文（若超时或出错，则返回 ServFail 报文）
      */
-    private byte[] forwardToUpstream(byte[] query, int len, int id) {
+    private byte[] forwardToUpstream(byte[] query, int len,
+                                     int id, DnsQuestion q) {
+
         try {
-            // ① 发送到上游
+            /* ① 发送到上游 */
             DatagramPacket upReq = new DatagramPacket(query, len, upstream);
             upstreamSocket.send(upReq);
 
-            // ② 等待上游响应，设置超时 2 秒
+            /* ② 接收上游响应（2 s 超时） */
             upstreamSocket.setSoTimeout(2000);
             byte[] buf = new byte[4096];
             DatagramPacket upResp = new DatagramPacket(buf, buf.length);
             upstreamSocket.receive(upResp);
 
-            // ③ 恢复原始事务 ID
+            /* ③ 把事务 ID 改回客户端原值 */
             ByteBuffer.wrap(buf, 0, 2).putShort((short) id);
-            return Arrays.copyOf(buf, upResp.getLength());
+            byte[] resp = Arrays.copyOf(buf, upResp.getLength());
+
+            /* ④ 把好用的记录写进缓存 */
+            cacheByAnswer(resp, q.qName());
+
+            return resp;
 
         } catch (SocketTimeoutException e) {
-            // 超时返回 SERVFAIL
-            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
+            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal())
                 System.out.println("Upstream timeout, return SERVFAIL");
-            }
             return ResponseBuilder.buildServFail(id, query, len);
 
         } catch (IOException ioe) {
-            // 其他 IO 错误也返回 SERVFAIL
-            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
+            if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal())
                 System.out.println("Upstream IO error: " + ioe);
-            }
             return ResponseBuilder.buildServFail(id, query, len);
+        }
+    }
+
+    private void cacheByAnswer(byte[] resp, String domain) {
+        try {
+            ByteBuffer buf = ByteBuffer.wrap(resp).order(ByteOrder.BIG_ENDIAN);
+            DnsHeader h = DnsHeader.parse(buf);
+            if (h.anCount() == 0) return;
+
+            /* 跳过 Question 区 */
+            DnsQuestion.parse(buf);
+
+            // ===== 这段 for 循环内部改成下面这样 =====
+            for (int i = 0; i < h.anCount(); i++) {
+                /* 读取 NAME（指针或标签序列） */
+                int len;
+                while (((len = buf.get() & 0xFF) != 0)) {
+                    if ((len & 0xC0) == 0xC0) {   // 压缩指针
+                        buf.get();                // 再吃一个字节
+                        break;
+                    } else {
+                        buf.position(buf.position() + len);
+                    }
+                }
+
+                int type = buf.getShort() & 0xFFFF;
+                int clazz = buf.getShort() & 0xFFFF;
+                int ttl = buf.getInt();
+                int rdLen = buf.getShort() & 0xFFFF;
+
+                if (clazz == DnsRecord.CLASS_IN &&
+                        (type == DnsRecord.TYPE_A || type == DnsRecord.TYPE_AAAA)) {
+
+                    byte[] rdata = new byte[rdLen];
+                    buf.get(rdata);
+                    String ip = InetAddress.getByAddress(rdata).getHostAddress();
+                    cache.put(domain, ip, ttl);            // ← 多次插入，内部去重
+
+                    if (logLevel == LogLevel.DEBUG)
+                        System.out.printf("[CACHE ADD] %s -> %s (ttl %d)%n", domain, ip, ttl);
+                    continue;                              // 继续扫下一条 Answer
+                } else {
+                    buf.position(buf.position() + rdLen);   // 跳过非 A/AAAA
+                }
+            }
+        } catch (Exception ignore) {
         }
     }
 
