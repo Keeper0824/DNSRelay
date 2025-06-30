@@ -4,6 +4,8 @@ import java.io.*;
 import java.net.*;
 import java.nio.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 public class DnsRelayServer {
@@ -21,24 +23,41 @@ public class DnsRelayServer {
                           LogLevel level) throws IOException {
 
         this.upstream = new InetSocketAddress(upstreamIp, DNS_PORT);
-
-        /* 监听客户端查询的 Socket —— 无权限可把 DNS_PORT 改 1053 */
-        this.socket = new DatagramSocket(DNS_PORT);
-
-        /* 发往上游 DNS 的临时 Socket —— 用随机端口即可 */
-        this.upstreamSocket = new DatagramSocket();
-
         this.logLevel = level;
 
-        /* 读取本地映射表 */
-        loadLocalTable(tableFile);
+        /* ---------- 横幅 1：上游 + Debug 级别 ---------- */
+        System.out.printf("Name server %s:%d.%n", upstreamIp, DNS_PORT);
+        System.out.printf("Debug level %d.%n", level.ordinal());
 
-        if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-            System.out.println("Local table loaded, size=" + localTable.size());
+        /* ---------- 尝试绑定本地 53 ---------- */
+        DatagramSocket tmp;
+        try {
+            tmp = new DatagramSocket(DNS_PORT);
+            System.out.println("Bind UDP port 53 ...OK!");
+        } catch (BindException be) {
+            System.out.println("Bind UDP port 53 ...**** Fail to bind UDP port, Error " + be.getMessage());
+            throw be;                           // 或者 System.exit(1);
+        }
+        this.socket = tmp;
+
+        /* ---------- 上游 Socket 随机端口 ---------- */
+        this.upstreamSocket = new DatagramSocket();
+
+        /* ---------- 读取本地映射表 ---------- */
+        int entryCnt = loadLocalTable(tableFile);     // 返回条目数
+        if (entryCnt == -1) {
+            System.out.printf("Try to load table \"%s\" ... Ignored!%n", tableFile);
+        } else {
+            int mem = localTable.entrySet().stream()  // 粗略估内存
+                    .mapToInt(e -> e.getKey().length() + e.getValue().length() + 1)
+                    .sum();
+            System.out.printf("Try to load table \"%s\" ... OK%n", tableFile);
+            System.out.printf("%d names, occupy %d bytes memory%n%n", entryCnt, mem);
         }
 
-        /* 可选：关机时自动关闭两个 Socket */
+        /* 关机钩子省略 … */
     }
+
 
 
     public void start() throws IOException {
@@ -132,12 +151,12 @@ public class DnsRelayServer {
         }
     }
 
+    private int loadLocalTable(String file) {
+        InputStream in = getClass().getClassLoader().getResourceAsStream(file);
+        if (in == null && !Files.exists(Path.of(file))) return -1;   // Ignored
 
-
-
-    private void loadLocalTable(String file) throws IOException {
         try (BufferedReader br = new BufferedReader(new InputStreamReader(
-                Objects.requireNonNull(getClass().getClassLoader().getResourceAsStream(file)),
+                in != null ? in : Files.newInputStream(Path.of(file)),
                 StandardCharsets.UTF_8))) {
 
             String line;
@@ -145,11 +164,16 @@ public class DnsRelayServer {
                 line = line.strip();
                 if (line.isEmpty() || line.startsWith("#")) continue;
                 String[] parts = line.split("\\s+");
-                if (parts.length == 2) localTable.put(parts[0].toLowerCase(), parts[1]);
+                if (parts.length == 2)
+                    localTable.put(parts[0].toLowerCase(), parts[1]);
             }
+            return localTable.size();
+        } catch (IOException e) {
+            System.out.println("**** Error reading db-file: " + e);
+            return -1;
         }
-
     }
+
     private static void dumpHex(String tag, byte[] buf, int len) {
         System.out.print(tag + " ");
         for (int i = 0; i < len; i++) {
