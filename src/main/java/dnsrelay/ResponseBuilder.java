@@ -12,7 +12,10 @@ public class ResponseBuilder {
 
         byte[] ipBytes = java.net.InetAddress.getByName(ip).getAddress();
 
-        DnsRecord record = DnsRecord.ofA(q.qName(), ipBytes, 300);
+        DnsRecord record = (ipBytes.length == 4)
+                ? DnsRecord.ofA(q.qName(), ipBytes, 300)
+                : DnsRecord.ofAAAA(q.qName(), ipBytes, 300);
+
         DnsHeader header = reqHeader.copyWithCounts(1, 0, 0);
 
         ByteBuffer buf = ByteBuffer.allocate(512).order(ByteOrder.BIG_ENDIAN);
