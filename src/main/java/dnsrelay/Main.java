@@ -8,7 +8,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
 
         /* ------- 缺省值 ------- */
-        String upstream = "202.106.0.20";   // 北互 DNS，和原 exe 一致
+        String upstream = "114.114.114.114";   // 北互 DNS，和原 exe 一致
         String table    = "dnsrelay.txt";
         LogLevel level  = LogLevel.NONE;
 

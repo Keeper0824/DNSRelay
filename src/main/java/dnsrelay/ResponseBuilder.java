@@ -12,9 +12,16 @@ public class ResponseBuilder {
 
         byte[] ipBytes = java.net.InetAddress.getByName(ip).getAddress();
 
-        DnsRecord record = (ipBytes.length == 4)
-                ? DnsRecord.ofA(q.qName(), ipBytes, 300)
-                : DnsRecord.ofAAAA(q.qName(), ipBytes, 300);
+        DnsRecord record;
+
+        if (ipBytes.length == 4) {
+            record = DnsRecord.ofA(q.qName(), ipBytes, 300);
+        } else if (ipBytes.length == 16) {
+            record = DnsRecord.ofAAAA(q.qName(), ipBytes, 300);
+        } else {
+            // 出现未知格式 IP，直接抛异常
+            throw new IllegalArgumentException("非法IP地址长度: " + ipBytes.length);
+        }
 
         DnsHeader header = reqHeader.copyWithCounts(1, 0, 0);
 
