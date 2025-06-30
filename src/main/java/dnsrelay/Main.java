@@ -8,30 +8,30 @@ public class Main {
     // 程序版本号
     private static final String VERSION = "1.00";
     // 构建时间
-    private static final String BUILD   = "Jun 30 2025 14:30:00";
+    private static final String BUILD = "Jun 30 2025 14:30:00";
 
     /**
      * 程序主方法
-     *
+     * <p>
      * 支持以下命令行参数：
-     *   -d    开启普通日志级别
-     *   -dd   开启调试日志级别
-     *   <dns-server>   指定上游 DNS 服务器 IP 地址（默认为 114.114.114.114）
-     *   <db-file>      指定本地黑/白名单数据库文件（默认为 dnsrelay.txt）
+     * -d    开启普通日志级别
+     * -dd   开启调试日志级别
+     * <dns-server>   指定上游 DNS 服务器 IP 地址（默认为 114.114.114.114）
+     * <db-file>      指定本地黑/白名单数据库文件（默认为 dnsrelay.txt）
      */
     public static void main(String[] args) throws Exception {
         // 默认上游 DNS 服务器
         String upstream = "114.114.114.114";
         // 默认本地解析表文件
-        String table    = "dnsrelay.txt";
+        String table = "dnsrelay.txt";
         // 默认不打印日志
-        LogLevel level  = LogLevel.NONE;
+        LogLevel level = LogLevel.NONE;
 
         // 解析命令行参数
         for (String arg : args) {
             switch (arg) {
                 // 开启普通日志
-                case "-d"  -> level = LogLevel.NORMAL;
+                case "-d" -> level = LogLevel.NORMAL;
                 // 开启调试日志
                 case "-dd" -> level = LogLevel.DEBUG;
                 default -> {

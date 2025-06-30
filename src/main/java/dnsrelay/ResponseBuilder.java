@@ -10,32 +10,30 @@ import java.nio.ByteOrder;
 public class ResponseBuilder {
 
     /**
-     * 构造本地应答报文（A 或 AAAA 记录）。
+     * 构造本地应答报文（A或 AAAA记录）。
      *
      * @param reqHeader 客户端请求中的 DNS 头部
      * @param q         客户端请求中的 Question 部分
      * @param ip        要返回的 IP 地址字符串（IPv4 或 IPv6）
      * @return 构造好的 DNS 响应报文字节数组
-     * @throws java.net.UnknownHostException 如果给定 IP 无法解析为 InetAddress
+     * @throws java.net.UnknownHostException 如果给定 IP无法解析为 InetAddress
      */
-    public static byte[] buildLocalAnswer(DnsHeader reqHeader,
-                                          DnsQuestion q,
-                                          String ip) throws java.net.UnknownHostException {
-        // 将字符串 IP 转换为字节数组（4 字节或 16 字节）
+    public static byte[] buildLocalAnswer(DnsHeader reqHeader, DnsQuestion q, String ip) throws java.net.UnknownHostException {
+        // 将字符串IP转换为字节数组（4 字节或 16 字节）
         byte[] ipBytes = InetAddress.getByName(ip).getAddress();
 
-        // 根据 IP 字节长度选择 A 或 AAAA 记录构造方法
+        // 根据IP字节长度选择A或AAAA记录构造方法
         DnsRecord record;
         if (ipBytes.length == 4) {
-            // IPv4：TTL 固定 300 秒
+            // IPv4：TTL固定300秒
             record = DnsRecord.ofA(q.qName(), ipBytes, 300);
-            // 打印解析后的 IPv4 地址，便于调试
+            // 打印解析后的IPv4地址，便于调试
             InetAddress ipv4 = InetAddress.getByAddress(record.rData());
             System.out.println(ipv4.getHostAddress());
         } else if (ipBytes.length == 16) {
-            // IPv6：TTL 固定 300 秒
+            // IPv6：TTL固定300秒
             record = DnsRecord.ofAAAA(q.qName(), ipBytes, 300);
-            // 打印解析后的 IPv6 地址，便于调试
+            // 打印解析后的IPv6地址，便于调试
             InetAddress ipv6 = InetAddress.getByAddress(record.rData());
             System.out.println(ipv6.getHostAddress());
         } else {
@@ -43,15 +41,14 @@ public class ResponseBuilder {
             throw new IllegalArgumentException("非法IP地址长度: " + ipBytes.length);
         }
 
-        // 构造响应头，将 QR=1（响应）、AnCount=1，其它 counts 保持默认
+        // 构造响应头，将QR=1（响应）、AnCount=1，其它 counts 保持默认
         DnsHeader header = reqHeader.copyWithCounts(1, 0, 0);
 
         // 分配缓冲区并按网络字节序写入
-        ByteBuffer buf = ByteBuffer.allocate(512)
-                .order(ByteOrder.BIG_ENDIAN);
+        ByteBuffer buf = ByteBuffer.allocate(512).order(ByteOrder.BIG_ENDIAN);
         header.write(buf);   // 写入头部
-        q.write(buf);        // 写入 Question
-        record.write(buf);   // 写入资源记录 RDATA
+        q.write(buf);        // 写入Question
+        record.write(buf);   // 写入资源记录RDATA
 
         // 将缓冲区中已写入的数据复制到返回数组
         byte[] out = new byte[buf.position()];
@@ -105,10 +102,10 @@ public class ResponseBuilder {
      */
     public static byte[] buildServFail(int id, byte[] origQuery, int len) {
         // 重新解析请求的头部和 Question
-        ByteBuffer in  = ByteBuffer.wrap(origQuery, 0, len)
+        ByteBuffer in = ByteBuffer.wrap(origQuery, 0, len)
                 .order(ByteOrder.BIG_ENDIAN);
         DnsHeader reqH = DnsHeader.parse(in);
-        DnsQuestion q  = DnsQuestion.parse(in);
+        DnsQuestion q = DnsQuestion.parse(in);
 
         // 构造失败响应头：RCODE=2, QD=1，其它 counts=0
         DnsHeader respH = new DnsHeader(

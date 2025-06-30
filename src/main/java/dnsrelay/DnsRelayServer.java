@@ -1,12 +1,17 @@
 package dnsrelay;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.*;
-import java.nio.*;
-import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -14,28 +19,44 @@ import java.util.concurrent.Executors;
  * DnsRelayServer：一个简单的 DNS 中继服务器，实现本地缓存与上游转发功能。
  */
 public class DnsRelayServer {
-    /** 本地监听的 DNS 端口 */
+    /**
+     * 本地监听的 DNS 端口
+     */
     private static final int DNS_PORT = 53;
-    /** UDP 报文缓冲区最大长度（符合 RFC 标准） */
+    /**
+     * UDP 报文缓冲区最大长度（符合 RFC 标准）
+     */
     private static final int BUF_SIZE = 512;
 
-    /** 本地 DNS 映射表：域名（小写）-> IP / 特殊值 */
+    /**
+     * 本地 DNS 映射表：域名（小写）-> IP / 特殊值
+     */
     private final Map<String, String> localTable = new HashMap<>();
-    /** 上游 DNS 服务器地址 */
+    /**
+     * 上游 DNS 服务器地址
+     */
     private final InetSocketAddress upstream;
-    /** 用于接收客户端请求和发送响应的 Socket */
+    /**
+     * 用于接收客户端请求和发送响应的 Socket
+     */
     private final DatagramSocket socket;
-    /** 日志打印级别 */
+    /**
+     * 日志打印级别
+     */
     private final LogLevel logLevel;
-    /** 用于向上游 DNS 转发请求的随机端口 Socket */
+    /**
+     * 用于向上游DNS转发请求的随机端口Socket
+     */
     private final DatagramSocket upstreamSocket;
-    /** 异步线程池，用于并发处理客户端查询 */
+    /**
+     * 异步线程池，用于并发处理客户端查询
+     */
     private ExecutorService executor = Executors.newCachedThreadPool();
 
     /**
-     * 构造函数：初始化上游服务器、日志级别、绑定本地 53 端口、加载本地映射表
+     * 构造函数：初始化上游服务器、日志级别、绑定本地53端口、加载本地映射表
      *
-     * @param upstreamIp 上游 DNS 服务器 IP 地址
+     * @param upstreamIp 上游DNS服务器IP地址
      * @param tableFile  本地映射表文件名
      * @param level      日志级别
      * @throws IOException 如果端口绑定或文件读取失败
@@ -50,7 +71,7 @@ public class DnsRelayServer {
         System.out.printf("Name server %s:%d.%n", upstreamIp, DNS_PORT);
         System.out.printf("Debug level %d.%n", level.ordinal());
 
-        // 尝试绑定本地 UDP 53 端口
+        // 尝试绑定本地UDP_53端口
         DatagramSocket tmp;
         try {
             tmp = new DatagramSocket(DNS_PORT);
@@ -61,10 +82,10 @@ public class DnsRelayServer {
         }
         this.socket = tmp;
 
-        // 初始化用于上游转发的随机端口 Socket
+        // 初始化用于上游转发的随机端口Socket
         this.upstreamSocket = new DatagramSocket();
 
-        // 加载本地 DNS 映射表，返回条目数
+        // 加载本地DNS映射表，返回条目数
         int entryCnt = loadLocalTable(tableFile);
         if (entryCnt == -1) {
             // 文件不存在或读取失败，忽略本地表
@@ -80,7 +101,23 @@ public class DnsRelayServer {
     }
 
     /**
-     * 启动服务器：循环接收客户端 UDP 报文并提交给线程池处理
+     * 十六进制转储，用于调试
+     *
+     * @param tag 日志前缀
+     * @param buf 字节数组
+     * @param len 有效长度
+     */
+    private static void dumpHex(String tag, byte[] buf, int len) {
+        System.out.println(tag + ": ");
+        for (int i = 0; i < len; i++) {
+            if (i % 16 == 0 && i != 0) System.out.println();
+            System.out.printf("%02X ", buf[i]);
+        }
+        System.out.println();
+    }
+
+    /**
+     * 启动服务器：循环接收客户端 UDP报文并提交给线程池处理
      *
      * @throws IOException 如果接收报文失败
      */
@@ -102,7 +139,7 @@ public class DnsRelayServer {
     }
 
     /**
-     * 处理单个 DNS 查询：
+     * 处理单个 DNS查询：
      * 1. 解析请求头和问题部分
      * 2. 检查本地映射表，直答 / 拦截 / 转发
      * 3. 根据日志级别打印日志
@@ -121,8 +158,7 @@ public class DnsRelayServer {
 
         // 普通日志：打印收到的查询信息
         if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-            System.out.printf("← %-15s : %-30s (ID 0x%04X)%n",
-                    clientIp, question.qName(), reqHeader.id());
+            System.out.printf("← %-15s : %-30s (ID 0x%04X)%n", clientIp, question.qName(), reqHeader.id());
         }
 
         // 查询本地映射表
@@ -211,9 +247,7 @@ public class DnsRelayServer {
         // 如果既不是资源也不存在文件，则忽略
         if (in == null && !Files.exists(Path.of(file))) return -1;
 
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(
-                in != null ? in : Files.newInputStream(Path.of(file)),
-                StandardCharsets.UTF_8))) {
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(in))) {
 
             String line;
             while ((line = br.readLine()) != null) {
@@ -230,21 +264,5 @@ public class DnsRelayServer {
             System.out.println("**** Error reading db-file: " + e);
             return -1;
         }
-    }
-
-    /**
-     * 十六进制转储，用于调试
-     *
-     * @param tag 日志前缀
-     * @param buf 字节数组
-     * @param len 有效长度
-     */
-    private static void dumpHex(String tag, byte[] buf, int len) {
-        System.out.print(tag + " ");
-        for (int i = 0; i < len; i++) {
-            if (i % 16 == 0 && i != 0) System.out.println();
-            System.out.printf("%02X ", buf[i]);
-        }
-        System.out.println();
     }
 }
