@@ -21,8 +21,9 @@ public record DnsRecord(String name, int type, int clazz,
 
     /* ---------- 新增工厂：AAAA ---------- */
     public static DnsRecord ofAAAA(String name, byte[] ipv6, int ttl) {
-        return new DnsRecord(name, TYPE_AAAA, CLASS_IN, ttl, ipv6);
+        return new DnsRecord(name, 28, 1, ttl, ipv6);
     }
+
 
     /* ---------- 序列化写入 ---------- */
     public void write(ByteBuffer buf) {

@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class DnsRelayServer {
     private static final int DNS_PORT = 53;
@@ -17,7 +19,7 @@ public class DnsRelayServer {
     private final LogLevel logLevel;   // 新字段
     // DnsRelayServer.java  —— 其他字段旁边
     private final DatagramSocket upstreamSocket;  // 用随机端口做转发
-
+    private ExecutorService executor = Executors.newCachedThreadPool();
 
     public DnsRelayServer(String upstreamIp, String tableFile,
                           LogLevel level) throws IOException {
@@ -63,9 +65,18 @@ public class DnsRelayServer {
     public void start() throws IOException {
         byte[] buf = new byte[BUF_SIZE];
         while (true) {
-            DatagramPacket pkt = new DatagramPacket(buf, buf.length);
-            socket.receive(pkt);
-            handleQuery(pkt);
+            DatagramPacket packet = new DatagramPacket(buf, buf.length);
+            socket.receive(packet);
+            executor.submit(() -> {
+                try {
+                    handleQuery(packet); // 你自己的处理方法
+                } catch (Exception e) {
+                    // 打印异常到控制台或日志，防止线程崩溃
+                    e.printStackTrace();
+                    // 或者用日志框架 logger.error("DNS query error", e);
+                }
+            });
+
         }
     }
 
@@ -86,7 +97,6 @@ public class DnsRelayServer {
         /* --- 判断本地表 --- */
         String ip   = localTable.get(question.qName().toLowerCase());
         byte[] resp;
-
         if (ip != null && !"0.0.0.0".equals(ip)) {          // ★ 非 0.0.0.0 → 直答
             resp = ResponseBuilder.buildLocalAnswer(reqHeader, question, ip);
 
@@ -132,20 +142,19 @@ public class DnsRelayServer {
             byte[] buf = new byte[4096];
             DatagramPacket upResp = new DatagramPacket(buf, buf.length);
             upstreamSocket.receive(upResp);
-
             // ③ 把 ID 改回原始（保险）
             ByteBuffer.wrap(buf, 0, 2).putShort((short) id);
             return Arrays.copyOf(buf, upResp.getLength());
 
         } catch (SocketTimeoutException e) {        // ⭐ 捕获超时
             if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-                System.out.println("⚠ Upstream timeout, return SERVFAIL");
+                System.out.println("Upstream timeout, return SERVFAIL");
             }
             // 返回一个 SERVFAIL （RCODE=2）报文
             return ResponseBuilder.buildServFail(id, query, len);
         } catch (IOException ioe) {                 // 其他 IO 问题
             if (logLevel.ordinal() >= LogLevel.NORMAL.ordinal()) {
-                System.out.println("⚠ Upstream IO error: " + ioe);
+                System.out.println("Upstream IO error: " + ioe);
             }
             return ResponseBuilder.buildServFail(id, query, len);
         }

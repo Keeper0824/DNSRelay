@@ -1,5 +1,6 @@
 package dnsrelay;
 
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
@@ -16,12 +17,16 @@ public class ResponseBuilder {
 
         if (ipBytes.length == 4) {
             record = DnsRecord.ofA(q.qName(), ipBytes, 300);
+            InetAddress ipv4 = InetAddress.getByAddress(record.rData());
+            System.out.println(ipv4.getHostAddress());
         } else if (ipBytes.length == 16) {
-            record = DnsRecord.ofAAAA(q.qName(), ipBytes, 300);
+            record = DnsRecord.ofAAAA(q.qName(), ipBytes, 300); // 👈用type=28
+            InetAddress ipv6 = InetAddress.getByAddress(record.rData());
+            System.out.println(ipv6.getHostAddress());
         } else {
-            // 出现未知格式 IP，直接抛异常
             throw new IllegalArgumentException("非法IP地址长度: " + ipBytes.length);
         }
+
 
         DnsHeader header = reqHeader.copyWithCounts(1, 0, 0);
 
