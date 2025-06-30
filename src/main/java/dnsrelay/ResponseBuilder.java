@@ -102,8 +102,7 @@ public class ResponseBuilder {
      */
     public static byte[] buildServFail(int id, byte[] origQuery, int len) {
         // 重新解析请求的头部和 Question
-        ByteBuffer in = ByteBuffer.wrap(origQuery, 0, len)
-                .order(ByteOrder.BIG_ENDIAN);
+        ByteBuffer in = ByteBuffer.wrap(origQuery, 0, len).order(ByteOrder.BIG_ENDIAN);
         DnsHeader reqH = DnsHeader.parse(in);
         DnsQuestion q = DnsQuestion.parse(in);
 
@@ -122,8 +121,7 @@ public class ResponseBuilder {
         );
 
         // 写入头部和 Question
-        ByteBuffer out = ByteBuffer.allocate(512)
-                .order(ByteOrder.BIG_ENDIAN);
+        ByteBuffer out = ByteBuffer.allocate(512).order(ByteOrder.BIG_ENDIAN);
         respH.write(out);
         q.write(out);
 
